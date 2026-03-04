@@ -4,10 +4,10 @@
 
 ## 📌 项目介绍
 
-- 通过`Cloudflare`后台面板可以对隧道可视化管理,但是每次登录或者换设备太麻烦了,所以有了本项目
-- 通过本地`config`的方式控制隧道
+- 首选`Cloudflare`后台面板可以对隧道可视化管理
+- 每次登录或者换设备太麻烦了,所以有了本项目,通过本地使用`config.yml`的方式控制隧道
 
-> **支持协议**：目前已测试 **HTTP / HTTPS**。其他协议需额外配置，请在使用后自行测试。
+> **支持协议**：目前已测试 **HTTP / HTTPS**。其他协议需额外配置，请在额外配置好以后自行测试。
 
 ---
 
@@ -23,7 +23,7 @@ sh /tmp/setup.sh
 ```
 
 脚本会自动：
-- 检测机器架构并下载对应的 cloudflared 二进制
+- 下载对应的 cloudflared 二进制
 - 引导完成 Cloudflare 账号授权（获取证书）
 - 创建隧道并保存凭据到安装目录
 
@@ -37,11 +37,8 @@ opkg install luci-app-cloudflared_*_all.ipk
 
 安装后刷新 LuCI，进入 **服务 → Cloudflared** 完成配置。
 
----
 
 ## ⚙️ 使用指南
-
----
 
 ## 🔑 获取 Cloudflare API Token
 
@@ -56,5 +53,6 @@ opkg install luci-app-cloudflared_*_all.ipk
 
 完成后点击 **保存并应用**，插件会自动同步 DNS 记录。
 
-
+## 截图
+![示例图片](./img/image.png)
 
