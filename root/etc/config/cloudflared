@@ -1,0 +1,2 @@
+config main 'main'
+	option base_path '/opt/cloudflare'

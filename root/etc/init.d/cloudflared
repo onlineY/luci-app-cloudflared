@@ -1,0 +1,64 @@
+#!/bin/sh /etc/rc.common
+
+START=99
+STOP=10
+USE_PROCD=1
+
+find_binary() {
+	local base_path="$1"
+	local custom_path
+
+	config_get custom_path main cloudflared_path ""
+
+	if [ -n "$custom_path" ] && [ -x "$custom_path" ]; then
+		echo "$custom_path"
+		return 0
+	fi
+
+	# Auto-detect in base_path
+	for f in "$base_path/cloudflared" "$base_path"/cloudflared-linux-*; do
+		if [ -x "$f" ]; then
+			echo "$f"
+			return 0
+		fi
+	done
+
+	# Fallback to PATH
+	if [ -x "/usr/bin/cloudflared" ]; then
+		echo "/usr/bin/cloudflared"
+		return 0
+	fi
+
+	return 1
+}
+
+start_service() {
+	config_load cloudflared
+
+	local base_path
+	config_get base_path main base_path "/opt/cloudflare"
+
+	local bin
+	bin=$(find_binary "$base_path")
+	if [ -z "$bin" ]; then
+		logger -t cloudflared "ERROR: cloudflared binary not found"
+		return 1
+	fi
+
+	local config_file="$base_path/config.yml"
+	if [ ! -f "$config_file" ]; then
+		logger -t cloudflared "ERROR: $config_file not found"
+		return 1
+	fi
+
+	procd_open_instance
+	procd_set_param command "$bin" --config "$config_file" tunnel run
+	procd_set_param respawn
+	procd_set_param stdout 1
+	procd_set_param stderr 1
+	procd_close_instance
+}
+
+stop_service() {
+	:
+}

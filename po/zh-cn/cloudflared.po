@@ -1,0 +1,138 @@
+msgid ""
+msgstr ""
+"Content-Type: text/plain; charset=UTF-8\n"
+
+msgid "Cloudflared"
+msgstr "Cloudflare 隧道"
+
+msgid "Cloudflared Tunnel"
+msgstr "Cloudflare 隧道"
+
+msgid "Configure Cloudflare Tunnel"
+msgstr "配置 Cloudflare 隧道"
+
+msgid "Cloudflared Status"
+msgstr "Cloudflare 状态"
+
+msgid "Running"
+msgstr "运行中"
+
+msgid "Stopped"
+msgstr "已停止"
+
+msgid "Base path not found"
+msgstr "基础路径未找到"
+
+msgid "cert.pem missing"
+msgstr "cert.pem 证书缺失"
+
+msgid "Tunnel JSON missing"
+msgstr "隧道 JSON 文件缺失"
+
+msgid "Cloudflared binary missing"
+msgstr "cloudflared 可执行文件缺失"
+
+msgid "Main Settings"
+msgstr "基本设置"
+
+msgid "Cloudflare Base Path"
+msgstr "Cloudflare 基础路径"
+
+msgid "Directory for config.yml, cert.pem and tunnel JSON."
+msgstr "存放 config.yml、cert.pem 和隧道 JSON 的目录。"
+
+msgid "Cloudflared Binary Path"
+msgstr "Cloudflared 程序路径"
+
+msgid "Leave empty to auto-detect from base path."
+msgstr "留空则从基础路径自动检测。"
+
+msgid "Not found"
+msgstr "未找到"
+
+msgid "Certificate Path"
+msgstr "证书路径"
+
+msgid "Leave empty to use <base_path>/cert.pem."
+msgstr "留空则使用 <基础路径>/cert.pem。"
+
+msgid "Cloudflare API Token"
+msgstr "Cloudflare API 令牌"
+
+msgid "Domain"
+msgstr "域名"
+
+msgid "Your root domain (e.g. example.com). Used for DNS record sync."
+msgstr "您的根域名（例如 example.com），用于 DNS 记录同步。"
+
+msgid "Save &amp; Apply will auto-sync DNS CNAME records."
+msgstr "保存并应用 将自动同步 DNS CNAME 记录。"
+
+msgid "DNS status: API Token not configured."
+msgstr "DNS 状态：API 令牌未配置。"
+
+msgid "DNS status: Domain not configured."
+msgstr "DNS 状态：域名未配置。"
+
+msgid "DNS status: Tunnel JSON not found."
+msgstr "DNS 状态：隧道 JSON 文件未找到。"
+
+msgid "Orphaned DNS (will be deleted on save)"
+msgstr "孤立 DNS 记录（保存时将被删除）"
+
+msgid "Ingress Rules"
+msgstr "入站规则"
+
+msgid "Subdomain"
+msgstr "子域名"
+
+msgid "Protocol"
+msgstr "协议"
+
+msgid "IP Address"
+msgstr "IP 地址"
+
+msgid "Port"
+msgstr "端口"
+
+msgid "DNS"
+msgstr "DNS 状态"
+
+msgid "Cannot check: missing config"
+msgstr "无法检查：缺少配置"
+
+msgid "Unknown"
+msgstr "未知"
+
+msgid "CNAME record exists"
+msgstr "CNAME 记录已存在"
+
+msgid "Synced"
+msgstr "已同步"
+
+msgid "Will be created on next save"
+msgstr "将在下次保存时创建"
+
+msgid "Pending"
+msgstr "待同步"
+
+msgid "Service Control"
+msgstr "服务控制"
+
+msgid "Start Service"
+msgstr "启动服务"
+
+msgid "Start"
+msgstr "启动"
+
+msgid "Stop Service"
+msgstr "停止服务"
+
+msgid "Stop"
+msgstr "停止"
+
+msgid "Restart Service"
+msgstr "重启服务"
+
+msgid "Restart"
+msgstr "重启"

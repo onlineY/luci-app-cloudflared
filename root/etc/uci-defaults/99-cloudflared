@@ -1,0 +1,10 @@
+#!/bin/sh
+# First-install: ensure init script is executable and enable service
+
+chmod +x /etc/init.d/cloudflared 2>/dev/null
+/etc/init.d/cloudflared enable 2>/dev/null
+
+# Create default base directory
+mkdir -p /opt/cloudflare
+
+exit 0

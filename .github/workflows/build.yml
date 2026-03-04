@@ -1,0 +1,99 @@
+name: Build IPK
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set version
+        id: version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/v}"
+          else
+            VERSION="1.0.0-$(date +%Y%m%d)-${GITHUB_SHA::7}"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Building version: $VERSION"
+
+      - name: Build IPK package
+        run: |
+          PKG_NAME="luci-app-cloudflared"
+          VERSION="${{ steps.version.outputs.version }}"
+          ARCH="all"
+
+          mkdir -p build/data build/control output
+
+          # Data: copy all files from root/
+          cp -a root/* build/data/
+          chmod 755 build/data/etc/init.d/cloudflared
+          chmod 644 build/data/etc/config/cloudflared
+          find build/data -type d -exec chmod 755 {} \;
+
+          # Control file
+          INSTALLED_SIZE=$(du -sb build/data | cut -f1)
+          cat > build/control/control <<EOF
+          Package: ${PKG_NAME}
+          Version: ${VERSION}-1
+          Depends: libc, curl, luci-base
+          Source: https://github.com/${{ github.repository }}
+          SourceName: ${PKG_NAME}
+          Section: luci
+          SourceDateEpoch: $(date +%s)
+          Maintainer: ${{ github.repository_owner }}
+          Architecture: ${ARCH}
+          Installed-Size: ${INSTALLED_SIZE}
+          Description: LuCI support for Cloudflare Tunnel
+          EOF
+
+          echo "/etc/config/cloudflared" > build/control/conffiles
+
+          cat > build/control/postinst <<'EOF'
+          #!/bin/sh
+          [ "${IPKG_NO_SCRIPT}" = "1" ] && exit 0
+          [ -s ${IPKG_INSTROOT}/lib/functions.sh ] || exit 0
+          . ${IPKG_INSTROOT}/lib/functions.sh
+          default_postinst $0 $@
+          EOF
+          chmod 755 build/control/postinst
+
+          cat > build/control/prerm <<'EOF'
+          #!/bin/sh
+          [ -s ${IPKG_INSTROOT}/lib/functions.sh ] || exit 0
+          . ${IPKG_INSTROOT}/lib/functions.sh
+          default_prerm $0 $@
+          EOF
+          chmod 755 build/control/prerm
+
+          # Assemble IPK (tar.gz archive containing 3 files)
+          echo "2.0" > build/debian-binary
+          (cd build/control && tar czf ../control.tar.gz .)
+          (cd build/data && tar czf ../data.tar.gz .)
+          (cd build && tar czf "../output/${PKG_NAME}_${VERSION}-1_${ARCH}.ipk" \
+            ./debian-binary ./control.tar.gz ./data.tar.gz)
+
+          echo "=== Package built ==="
+          ls -lh output/
+          cat build/control/control
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: luci-app-cloudflared-ipk
+          path: output/*.ipk
+
+      - name: Create Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: output/*.ipk
+          generate_release_notes: true
