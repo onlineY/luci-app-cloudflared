@@ -98,6 +98,41 @@ local function fetch_tunnel_dns(token, tunnel_id, domain)
     return records
 end
 
+local function do_dns_sync()
+    local b = uci:get("cloudflared", "main", "base_path") or "/opt/cloudflare"
+    local cfd_bin = find_binary(b) or "/usr/bin/cloudflared"
+    local cert = resolve_cert(b)
+    local tk = uci:get("cloudflared", "main", "api_token") or ""
+    local domain = uci:get("cloudflared", "main", "domain") or ""
+    local tid = get_tunnel_info(b)
+    if not tid or tk == "" or domain == "" then return end
+
+    local hosts = {}
+    uci:foreach("cloudflared", "ingress", function(sec)
+        if sec.hostname and sec.hostname ~= "" then
+            hosts[sec.hostname] = true
+        end
+    end)
+
+    local records = fetch_tunnel_dns(tk, tid, domain)
+
+    for host, _ in pairs(hosts) do
+        if not records[host] then
+            sys.call(string.format(
+                "%s tunnel --origincert %s route dns %s %s >/dev/null 2>&1",
+                shellquote(cfd_bin), shellquote(cert),
+                shellquote(tid), shellquote(host)))
+        end
+    end
+
+    for host, info in pairs(records) do
+        if not hosts[host] then
+            cf_api("DELETE",
+                "/zones/" .. info.zone_id .. "/dns_records/" .. info.id, tk)
+        end
+    end
+end
+
 
 -- ===== Map =====
 
@@ -225,6 +260,27 @@ if dns_ready then
     end
 end
 
+-- Add manual DNS sync button in ingress description
+if dns_ready then
+    ing_desc = ing_desc ..
+        '<br><button type="button" class="btn cbi-button cbi-button-apply" ' ..
+        'style="margin-top:6px" id="btn_dns_sync" onclick="cfDnsSync()">' ..
+        translate("Sync DNS Now") .. '</button>' ..
+        '<script>' ..
+        'function cfDnsSync(){' ..
+            'var btn=document.getElementById("btn_dns_sync");' ..
+            'btn.disabled=true;btn.innerText="' .. translate("Syncing...") .. '";' ..
+            'var f=document.createElement("form");' ..
+            'f.method="POST";f.action=window.location.pathname;' ..
+            'var h=document.createElement("input");' ..
+            'h.type="hidden";h.name="_dns_sync_action";h.value="1";f.appendChild(h);' ..
+            'var tk=document.querySelector("input[name=token]");' ..
+            'if(tk){var t=document.createElement("input");' ..
+            't.type="hidden";t.name="token";t.value=tk.value;f.appendChild(t);}' ..
+            'document.body.appendChild(f);f.submit();}' ..
+        '</script>'
+end
+
 ing = m:section(TypedSection, "ingress", translate("Ingress Rules"), ing_desc)
 ing.template = "cbi/tblsection"
 ing.anonymous = true
@@ -281,7 +337,11 @@ proto.cfgvalue = function(self, section)
 end
 
 proto.write = function(self, section, value)
-    -- saved by port column
+    local ip_val = http.formvalue("cbid.cloudflared." .. section .. "._ip") or ""
+    local port_val = http.formvalue("cbid.cloudflared." .. section .. "._port") or ""
+    if ip_val ~= "" and port_val ~= "" then
+        uci:set("cloudflared", section, "service", value .. "://" .. ip_val .. ":" .. port_val)
+    end
 end
 
 -- IP address column
@@ -295,7 +355,11 @@ ip.cfgvalue = function(self, section)
 end
 
 ip.write = function(self, section, value)
-    -- saved by port column
+    local proto_val = http.formvalue("cbid.cloudflared." .. section .. "._protocol") or "http"
+    local port_val = http.formvalue("cbid.cloudflared." .. section .. "._port") or ""
+    if value ~= "" and port_val ~= "" then
+        uci:set("cloudflared", section, "service", proto_val .. "://" .. value .. ":" .. port_val)
+    end
 end
 
 -- Port column (assembles protocol://ip:port into service)
@@ -481,6 +545,12 @@ btn_restart.inputstyle = "reload"
 
 function btn_restart.write(self, section)
     sys.call("/etc/init.d/cloudflared restart >/dev/null 2>&1")
+    http.redirect(dsp.build_url("admin/services/cloudflared"))
+end
+
+-- Handle manual DNS sync POST
+if http.formvalue("_dns_sync_action") then
+    do_dns_sync()
     http.redirect(dsp.build_url("admin/services/cloudflared"))
 end
 
