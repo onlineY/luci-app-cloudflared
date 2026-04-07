@@ -1,0 +1,373 @@
+#!/bin/sh
+
+# cloudflared-hotupdate
+# One-command hot update for cert/domain/config without reinstall.
+
+set -u
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+NC='\033[0m'
+
+info()  { printf "${GREEN}[INFO]${NC} %s\n" "$1"; }
+warn()  { printf "${YELLOW}[WARN]${NC} %s\n" "$1"; }
+error() { printf "${RED}[ERROR]${NC} %s\n" "$1"; exit 1; }
+step()  { printf "\n${CYAN}===== %s =====${NC}\n" "$1"; }
+
+usage() {
+    cat <<'USAGE'
+Usage:
+  cloudflared-hotupdate [options]
+
+Options:
+  -d, --domain <domain>      New root domain (e.g. example.com)
+  -b, --base-path <path>     Cloudflare base path (default from UCI or /opt/cloudflare)
+      --no-rewrite-hosts     Keep existing ingress hostnames unchanged
+      --no-dns-sync          Skip cloudflared route dns for ingress hostnames
+      --no-restart           Do not restart /etc/init.d/cloudflared
+  -h, --help                 Show this help
+
+Default behavior:
+  1) Delete current cert.pem (base_path/custom path + ~/.cloudflared + /root/.cloudflared)
+  2) Force cloudflared login (re-authorization)
+  3) Optionally switch UCI domain and rewrite ingress hostnames old->new
+  4) Regenerate config.yml
+  5) Optional DNS sync and service restart
+USAGE
+}
+
+require_root() {
+    [ "$(id -u)" -eq 0 ] || error "Please run as root"
+}
+
+find_binary() {
+    local base_path="$1"
+    local custom_path
+
+    custom_path="$(uci -q get cloudflared.main.cloudflared_path 2>/dev/null || true)"
+
+    if [ -n "$custom_path" ] && [ -x "$custom_path" ]; then
+        printf "%s" "$custom_path"
+        return 0
+    fi
+
+    if [ -x "$base_path/cloudflared" ]; then
+        printf "%s" "$base_path/cloudflared"
+        return 0
+    fi
+
+    for f in "$base_path"/cloudflared-linux-*; do
+        if [ -x "$f" ]; then
+            printf "%s" "$f"
+            return 0
+        fi
+    done
+
+    if [ -x "/usr/bin/cloudflared" ]; then
+        printf "%s" "/usr/bin/cloudflared"
+        return 0
+    fi
+
+    return 1
+}
+
+find_tunnel_json() {
+    local base_path="$1"
+    local d
+    local found
+
+    for d in "$base_path" "$HOME/.cloudflared" "/root/.cloudflared"; do
+        [ -d "$d" ] || continue
+        found="$(find "$d" -maxdepth 1 -name '*.json' -type f 2>/dev/null | head -n 1)"
+        if [ -n "$found" ]; then
+            printf "%s" "$found"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+domain_is_valid() {
+    local d="$1"
+    # relaxed validation for root domain
+    printf "%s" "$d" | grep -Eq '^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)+$'
+}
+
+rewrite_ingress_hosts() {
+    local old_domain="$1"
+    local new_domain="$2"
+    local sec
+    local host
+    local prefix
+    local changed=0
+    local sec_list
+    local host_new
+
+    sec_list="$(uci -q show cloudflared 2>/dev/null | awk -F= '$2=="ingress"{print $1}')"
+
+    [ -n "$sec_list" ] || {
+        info "No ingress sections found, skip hostname rewrite"
+        return 0
+    }
+
+    for sec in $sec_list; do
+        host="$(uci -q get "$sec.hostname" 2>/dev/null || true)"
+        [ -n "$host" ] || continue
+
+        if [ -n "$old_domain" ] && [ "$host" = "$old_domain" ]; then
+            uci set "$sec.hostname=$new_domain"
+            changed=1
+            info "Rewrote hostname: $host -> $new_domain"
+            continue
+        fi
+
+        if [ -n "$old_domain" ] && [ "${host%.$old_domain}" != "$host" ]; then
+            prefix="${host%.$old_domain}"
+            host_new="$prefix.$new_domain"
+            uci set "$sec.hostname=$host_new"
+            changed=1
+            info "Rewrote hostname: $host -> $host_new"
+            continue
+        fi
+
+        if [ "${host#*.}" = "$host" ]; then
+            host_new="$host.$new_domain"
+            uci set "$sec.hostname=$host_new"
+            changed=1
+            info "Expanded hostname: $host -> $host_new"
+        fi
+    done
+
+    if [ "$changed" -eq 1 ]; then
+        info "Ingress hostnames updated"
+    else
+        info "No ingress hostnames needed rewrite"
+    fi
+}
+
+generate_config() {
+    local base_path="$1"
+    local cert_path="$2"
+    local tunnel_json="$3"
+    local tunnel_id
+    local config_path="$base_path/config.yml"
+    local sec
+    local host
+    local service
+    local tmp
+    local sec_list
+
+    tunnel_id="$(basename "$tunnel_json" .json)"
+    tmp="$(mktemp /tmp/cloudflared-config.XXXXXX)" || error "Failed to create temp file"
+
+    {
+        printf "tunnel: %s\n" "$tunnel_id"
+        printf "credentials-file: %s\n" "$tunnel_json"
+        printf "origincert: %s\n\n" "$cert_path"
+        printf "ingress:\n"
+
+        sec_list="$(uci -q show cloudflared 2>/dev/null | awk -F= '$2=="ingress"{print $1}')"
+        for sec in $sec_list; do
+            host="$(uci -q get "$sec.hostname" 2>/dev/null || true)"
+            service="$(uci -q get "$sec.service" 2>/dev/null || true)"
+            [ -n "$host" ] || continue
+            [ -n "$service" ] || continue
+
+            printf "  - hostname: %s\n" "$host"
+            printf "    service: %s\n\n" "$service"
+        done
+
+        printf "  - service: http_status:404\n"
+    } > "$tmp"
+
+    if [ -f "$config_path.bak2" ]; then
+        rm -f "$config_path.bak2"
+    fi
+    if [ -f "$config_path.bak1" ]; then
+        mv "$config_path.bak1" "$config_path.bak2"
+    fi
+    if [ -f "$config_path" ]; then
+        mv "$config_path" "$config_path.bak1"
+    fi
+
+    mv "$tmp" "$config_path"
+    info "Generated config: $config_path"
+}
+
+dns_sync() {
+    local bin_path="$1"
+    local cert_path="$2"
+    local tunnel_id="$3"
+    local sec
+    local host
+    local sec_list
+
+    sec_list="$(uci -q show cloudflared 2>/dev/null | awk -F= '$2=="ingress"{print $1}')"
+    [ -n "$sec_list" ] || return 0
+
+    for sec in $sec_list; do
+        host="$(uci -q get "$sec.hostname" 2>/dev/null || true)"
+        [ -n "$host" ] || continue
+
+        if "$bin_path" tunnel --origincert "$cert_path" route dns "$tunnel_id" "$host" >/dev/null 2>&1; then
+            info "DNS synced: $host"
+        else
+            warn "DNS sync failed for: $host"
+        fi
+    done
+}
+
+# ---- Parse args ----
+BASE_PATH="$(uci -q get cloudflared.main.base_path 2>/dev/null || true)"
+BASE_PATH="${BASE_PATH:-/opt/cloudflare}"
+NEW_DOMAIN=""
+NO_REWRITE_HOSTS=0
+NO_DNS_SYNC=0
+NO_RESTART=0
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -d|--domain)
+            shift
+            [ $# -gt 0 ] || error "--domain requires a value"
+            NEW_DOMAIN="$1"
+            ;;
+        -b|--base-path)
+            shift
+            [ $# -gt 0 ] || error "--base-path requires a value"
+            BASE_PATH="$1"
+            ;;
+        --no-rewrite-hosts)
+            NO_REWRITE_HOSTS=1
+            ;;
+        --no-dns-sync)
+            NO_DNS_SYNC=1
+            ;;
+        --no-restart)
+            NO_RESTART=1
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            error "Unknown option: $1 (use --help)"
+            ;;
+    esac
+    shift
+done
+
+require_root
+mkdir -p "$BASE_PATH"
+
+if [ -n "$NEW_DOMAIN" ] && ! domain_is_valid "$NEW_DOMAIN"; then
+    error "Invalid domain: $NEW_DOMAIN"
+fi
+
+step "Detect environment"
+OLD_DOMAIN="$(uci -q get cloudflared.main.domain 2>/dev/null || true)"
+CUSTOM_CERT="$(uci -q get cloudflared.main.cert_path 2>/dev/null || true)"
+CERT_PATH="${CUSTOM_CERT:-$BASE_PATH/cert.pem}"
+
+BIN_PATH="$(find_binary "$BASE_PATH" || true)"
+[ -n "$BIN_PATH" ] || error "cloudflared binary not found"
+info "Binary: $BIN_PATH"
+info "Base path: $BASE_PATH"
+
+if [ -n "$OLD_DOMAIN" ]; then
+    info "Current domain: $OLD_DOMAIN"
+fi
+if [ -n "$NEW_DOMAIN" ]; then
+    info "Target domain: $NEW_DOMAIN"
+fi
+
+step "Force re-authentication"
+for p in "$CERT_PATH" "$BASE_PATH/cert.pem" "$HOME/.cloudflared/cert.pem" "/root/.cloudflared/cert.pem"; do
+    [ -n "$p" ] || continue
+    if [ -f "$p" ]; then
+        rm -f "$p"
+        info "Removed cert: $p"
+    fi
+done
+
+info "Running cloudflared login (open URL in browser and authorize)"
+"$BIN_PATH" login
+
+SRC_CERT=""
+for p in "$HOME/.cloudflared/cert.pem" "/root/.cloudflared/cert.pem"; do
+    if [ -f "$p" ]; then
+        SRC_CERT="$p"
+        break
+    fi
+done
+
+[ -n "$SRC_CERT" ] || error "cert.pem not found after login"
+
+mkdir -p "$(dirname "$CERT_PATH")"
+if [ "$SRC_CERT" != "$CERT_PATH" ]; then
+    cp "$SRC_CERT" "$CERT_PATH"
+fi
+chmod 600 "$CERT_PATH" 2>/dev/null || true
+info "Certificate ready: $CERT_PATH"
+
+step "Update UCI"
+if ! uci -q get cloudflared.main >/dev/null 2>&1; then
+    uci set cloudflared.main=main
+fi
+uci set cloudflared.main.base_path="$BASE_PATH"
+
+if [ -n "$CUSTOM_CERT" ]; then
+    uci set cloudflared.main.cert_path="$CERT_PATH"
+fi
+
+if [ -n "$NEW_DOMAIN" ]; then
+    uci set cloudflared.main.domain="$NEW_DOMAIN"
+    if [ "$NO_REWRITE_HOSTS" -eq 0 ]; then
+        rewrite_ingress_hosts "$OLD_DOMAIN" "$NEW_DOMAIN"
+    else
+        info "Skip ingress hostname rewrite"
+    fi
+fi
+
+uci commit cloudflared
+info "UCI config committed"
+
+step "Regenerate config.yml"
+TUNNEL_JSON="$(find_tunnel_json "$BASE_PATH" || true)"
+[ -n "$TUNNEL_JSON" ] || error "Tunnel JSON not found in $BASE_PATH or ~/.cloudflared"
+
+if [ "$(dirname "$TUNNEL_JSON")" != "$BASE_PATH" ]; then
+    cp "$TUNNEL_JSON" "$BASE_PATH/"
+    TUNNEL_JSON="$BASE_PATH/$(basename "$TUNNEL_JSON")"
+    info "Copied tunnel JSON to: $TUNNEL_JSON"
+fi
+
+TUNNEL_ID="$(basename "$TUNNEL_JSON" .json)"
+generate_config "$BASE_PATH" "$CERT_PATH" "$TUNNEL_JSON"
+
+if [ "$NO_DNS_SYNC" -eq 0 ]; then
+    step "Sync DNS"
+    dns_sync "$BIN_PATH" "$CERT_PATH" "$TUNNEL_ID"
+else
+    warn "DNS sync skipped"
+fi
+
+if [ "$NO_RESTART" -eq 0 ] && [ -x /etc/init.d/cloudflared ]; then
+    step "Restart service"
+    if /etc/init.d/cloudflared restart >/dev/null 2>&1; then
+        info "Service restarted"
+    else
+        warn "Service restart failed, please check /etc/init.d/cloudflared status"
+    fi
+else
+    warn "Service restart skipped"
+fi
+
+step "Done"
+info "Hot update complete"
+info "Config: $BASE_PATH/config.yml"
+info "Cert:   $CERT_PATH"
+info "Tunnel: $TUNNEL_JSON"

@@ -41,6 +41,22 @@ opkg install luci-app-cloudflared_*_all.ipk
 
 ## ⚙️ 使用指南
 
+### 热更新（不用卸载重装）
+
+安装插件后可直接执行：
+
+```bash
+# 仅强制重新登录并覆盖 cert.pem
+cloudflared-hotupdate
+
+# 切换域名并自动重写 ingress hostname、重建 config.yml、重启服务
+cloudflared-hotupdate --domain new-example.com
+```
+
+说明：该命令会删除当前证书（含 `~/.cloudflared/cert.pem` 和 `/root/.cloudflared/cert.pem`），强制重新授权后覆盖证书并热更新配置。
+
+
+
 ## 🔑 获取 Cloudflare API Token
 
 为了实现 DNS 记录的自动同步，需要配置一个 Cloudflare API Token：
