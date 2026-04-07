@@ -286,6 +286,60 @@ ing.template = "cbi/tblsection"
 ing.anonymous = true
 ing.addremove = true
 
+local proto
+local ip
+local port
+
+local function parse_service(service)
+    if not service or service == "" then
+        return nil, nil, nil
+    end
+    local p, host, prt = service:match("^([%w]+)://(.+):(%d+)$")
+    return p, host, prt
+end
+
+local function service_part_from_form(opt, section)
+    if not opt then
+        return nil
+    end
+    return opt:formvalue(section)
+end
+
+local function service_part_from_cfg(opt, section, fallback)
+    if not opt then
+        return fallback
+    end
+    local v = opt.cfgvalue and opt:cfgvalue(section) or nil
+    if v == nil or v == "" then
+        return fallback
+    end
+    return v
+end
+
+local function sync_service(section)
+    local proto_val = service_part_from_form(proto, section)
+    local ip_val = service_part_from_form(ip, section)
+    local port_val = service_part_from_form(port, section)
+
+    if proto_val == nil then
+        proto_val = service_part_from_cfg(proto, section, "http")
+    end
+    if ip_val == nil then
+        ip_val = service_part_from_cfg(ip, section, "")
+    end
+    if port_val == nil then
+        port_val = service_part_from_cfg(port, section, "")
+    end
+
+    local cursor = (proto and proto.map and proto.map.uci) or uci
+    if ip_val ~= "" and port_val ~= "" then
+        cursor:set("cloudflared", section, "service",
+            string.format("%s://%s:%s", proto_val, ip_val, port_val))
+    else
+        cursor:delete("cloudflared", section, "service")
+    end
+end
+
 -- Subdomain column
 hostname = ing:option(Value, "hostname", translate("Subdomain"))
 hostname.placeholder = "example"
@@ -322,7 +376,7 @@ hostname.write = function(self, section, value)
 end
 
 -- Protocol column
-local proto = ing:option(ListValue, "_protocol", translate("Protocol"))
+proto = ing:option(ListValue, "_protocol", translate("Protocol"))
 proto:value("http", "HTTP")
 proto:value("https", "HTTPS")
 proto:value("tcp", "TCP")
@@ -333,52 +387,42 @@ proto.default = "http"
 
 proto.cfgvalue = function(self, section)
     local svc = uci:get("cloudflared", section, "service") or ""
-    return svc:match("^(%w+)://") or "http"
+    local p = parse_service(svc)
+    return p or "http"
 end
 
 proto.write = function(self, section, value)
-    local ip_val = http.formvalue("cbid.cloudflared." .. section .. "._ip") or ""
-    local port_val = http.formvalue("cbid.cloudflared." .. section .. "._port") or ""
-    if ip_val ~= "" and port_val ~= "" then
-        uci:set("cloudflared", section, "service", value .. "://" .. ip_val .. ":" .. port_val)
-    end
+    sync_service(section)
 end
 
 -- IP address column
-local ip = ing:option(Value, "_ip", translate("IP Address"))
+ip = ing:option(Value, "_ip", translate("IP Address"))
 ip.placeholder = "192.168.31.1"
 ip.datatype = "ipaddr"
 
 ip.cfgvalue = function(self, section)
     local svc = uci:get("cloudflared", section, "service") or ""
-    return svc:match("://([%d%.]+)") or ""
+    local _, host = parse_service(svc)
+    return host or ""
 end
 
 ip.write = function(self, section, value)
-    local proto_val = http.formvalue("cbid.cloudflared." .. section .. "._protocol") or "http"
-    local port_val = http.formvalue("cbid.cloudflared." .. section .. "._port") or ""
-    if value ~= "" and port_val ~= "" then
-        uci:set("cloudflared", section, "service", proto_val .. "://" .. value .. ":" .. port_val)
-    end
+    sync_service(section)
 end
 
 -- Port column (assembles protocol://ip:port into service)
-local port = ing:option(Value, "_port", translate("Port"))
+port = ing:option(Value, "_port", translate("Port"))
 port.placeholder = "8080"
 port.datatype = "port"
 
 port.cfgvalue = function(self, section)
     local svc = uci:get("cloudflared", section, "service") or ""
-    return svc:match(":(%d+)$") or ""
+    local _, _, prt = parse_service(svc)
+    return prt or ""
 end
 
 port.write = function(self, section, value)
-    local proto_val = http.formvalue("cbid.cloudflared." .. section .. "._protocol") or "http"
-    local ip_val = http.formvalue("cbid.cloudflared." .. section .. "._ip") or ""
-    local port_val = value or ""
-    if ip_val ~= "" and port_val ~= "" then
-        uci:set("cloudflared", section, "service", proto_val .. "://" .. ip_val .. ":" .. port_val)
-    end
+    sync_service(section)
 end
 
 -- Common IP datalist injection
